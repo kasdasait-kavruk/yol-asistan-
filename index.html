@@ -717,7 +717,7 @@ function familyUrl() {
   return location.href.split('#')[0].split('?')[0].replace(/index\.html$/, '') + 'aile.html?k=' + share.code;
 }
 function newCode() {
-  const a = new Uint8Array(18); crypto.getRandomValues(a);
+  const a = new Uint8Array(24); crypto.getRandomValues(a);
   return Array.from(a, b => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
 }
 async function fbReady() {
@@ -747,7 +747,8 @@ async function startShare(silent) {
     say('Aile takibine bağlanamadım. ' + (why || 'Ekrandaki hata kodunu kontrol et.'));
     return;
   }
-  share.code = lsGet('takipKodu') || newCode();
+  share.code = lsGet('takipKodu');
+  if (!share.code || share.code.length < 20) share.code = newCode();   // eski kısa kodları yenile
   lsSet('takipKodu', share.code);
   share.on = true;
   lsSet('paylas', '1');
