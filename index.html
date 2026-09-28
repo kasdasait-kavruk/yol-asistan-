@@ -714,7 +714,7 @@ myName.value = lsGet('adim') || '';
 myName.onchange = () => lsSet('adim', myName.value.trim());
 
 function familyUrl() {
-  return location.href.split('#')[0].split('?')[0].replace(/index\.html$/, '') + 'aile.html#' + share.code;
+  return location.href.split('#')[0].split('?')[0].replace(/index\.html$/, '') + 'aile.html?k=' + share.code;
 }
 function newCode() {
   const a = new Uint8Array(18); crypto.getRandomValues(a);

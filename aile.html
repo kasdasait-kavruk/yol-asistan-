@@ -33,8 +33,8 @@
   <h1 id="title">Aile Takibi</h1>
   <p id="status">Bağlanıyor…</p>
   <div id="sos" hidden>🆘 YARDIM İSTEDİ! Hemen ara ya da yanına git.</div>
-  <div id="map"></div>
-  <div class="row">
+  <div id="map" style="display:none"></div>
+  <div class="row" style="display:none">
     <a id="gmaps" class="primary" href="#" target="_blank" rel="noopener">🧭 Yanına yol tarifi al</a>
     <a id="center" href="#">📍 Haritayı ortala</a>
   </div>
@@ -46,7 +46,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script>
-const code = location.hash.slice(1);
+// Takip kodu linkin sonunda: aile.html?k=KOD (eski linkler için #KOD da çalışır)
+const code = (new URLSearchParams(location.search).get('k') || location.hash.slice(1)).trim();
 const statusEl = document.getElementById('status');
 const emptyEl = document.getElementById('empty');
 let data = null, marker = null, circle = null, first = true;
@@ -61,7 +62,17 @@ function ago(ms) {
   if (m < 60) return m + ' dakika önce';
   return Math.round(m / 60) + ' saat önce';
 }
-function showEmpty(text) { emptyEl.textContent = text; emptyEl.hidden = false; }
+function showEmpty(text) {
+  emptyEl.textContent = text; emptyEl.hidden = false;
+  document.getElementById('map').style.display = 'none';
+  document.querySelector('.row').style.display = 'none';
+}
+function showMap() {
+  emptyEl.hidden = true;
+  document.getElementById('map').style.display = '';
+  document.querySelector('.row').style.display = '';
+  map.invalidateSize();
+}
 
 function render() {
   if (!data) return;
@@ -85,7 +96,7 @@ if (!code || code.length < 20) {
       showEmpty('Şu an konum paylaşılmıyor. Yakınının uygulamada paylaşımı açması gerekiyor.');
       return;
     }
-    emptyEl.hidden = true;
+    showMap();
     const pos = [data.lat, data.lon];
     if (!marker) { marker = L.marker(pos).addTo(map); circle = L.circle(pos, { radius: data.acc || 20, weight: 1 }).addTo(map); }
     else { marker.setLatLng(pos); circle.setLatLng(pos).setRadius(data.acc || 20); }
