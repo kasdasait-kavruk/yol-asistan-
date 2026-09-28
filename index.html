@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yol Asistanı</title>
+<style>
+  :root {
+    --bg: #F3F6F4; --ink: #10231B; --muted: #4B5F56;
+    --accent: #0B6E4F; --accent-ink: #FFFFFF; --card: #FFFFFF; --line: #D4DED9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0E1714; --ink: #EAF2EE; --muted: #A5B8AF;
+      --accent: #3FBF8F; --accent-ink: #06130E; --card: #16231E; --line: #2A3B34; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 20px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: 24px 16px 48px; display: grid; gap: 20px; }
+  h1 { font-size: 28px; margin: 0; }
+  p.hint { margin: 0; color: var(--muted); font-size: 18px; }
+  button { font: inherit; cursor: pointer; border-radius: 16px; }
+  #talk { background: var(--accent); color: var(--accent-ink); border: 0;
+    padding: 32px 16px; font-size: 28px; font-weight: 700; }
+  #talk.listening { outline: 6px solid var(--ink); }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row button { flex: 1 1 180px; background: var(--card); color: var(--ink);
+    border: 2px solid var(--line); padding: 18px 12px; font-weight: 600; }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; min-width: 0; font: inherit; padding: 14px; border-radius: 12px;
+    border: 2px solid var(--line); background: var(--card); color: var(--ink); }
+  form button { background: var(--ink); color: var(--bg); border: 0; padding: 0 18px; }
+  #answer { background: var(--card); border: 2px solid var(--line); border-radius: 16px;
+    padding: 18px; min-height: 90px; font-size: 22px; }
+  #heard { color: var(--muted); font-size: 16px; margin: 0; }
+  #sosBtn { background: #C62828; color: #fff; border: 0; padding: 24px 16px;
+    font-size: 26px; font-weight: 800; }
+  #sosPanel { background: #C62828; color: #fff; border-radius: 16px; padding: 18px;
+    display: grid; gap: 12px; font-size: 22px; }
+  #sosPanel button { background: #fff; color: #C62828; border: 0; padding: 16px; font-weight: 800; }
+  #sosPanel a { color: #fff; font-weight: 700; }
+  details { background: var(--card); border: 2px solid var(--line); border-radius: 16px; padding: 12px 16px; }
+  summary { cursor: pointer; font-weight: 600; }
+  details form { margin-top: 12px; }
+  button:focus-visible, input:focus-visible { outline: 4px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Yol Asistanı</h1>
+  <p class="hint">Büyük düğmeye bas ve <b>“Neredeyim?”</b> de.</p>
+
+  <button id="talk">🎤 Konuş</button>
+
+  <div class="row">
+    <button id="whereBtn">📍 Neredeyim?</button>
+    <button id="repeatBtn">🔁 Tekrar söyle</button>
+  </div>
+
+  <form id="typeForm">
+    <input id="typed" placeholder="Ya da buraya yaz…" autocomplete="off">
+    <button type="submit">Sor</button>
+  </form>
+
+  <p id="heard"></p>
+  <div id="answer" aria-live="polite">Hazırım.</div>
+
+  <button id="sosBtn">🆘 YARDIM ÇAĞIR</button>
+
+  <div id="sosPanel" hidden>
+    <div id="sosText">Yardım çağırılıyor…</div>
+    <button id="sosCancel">İPTAL ET</button>
+  </div>
+
+  <details id="settings">
+    <summary>⚙️ Ayarlar: Yakınımın numarası</summary>
+    <form id="phoneForm">
+      <input id="phone" type="tel" placeholder="05xx xxx xx xx" autocomplete="off">
+      <button type="submit">Kaydet</button>
+    </form>
+  </details>
+</main>
+
+<script>
+const answerEl = document.getElementById('answer');
+const heardEl = document.getElementById('heard');
+const talkBtn = document.getElementById('talk');
+let lastAnswer = 'Hazırım.';
+
+// ---------- 1) SESLİ CEVAP ----------
+function say(text) {
+  lastAnswer = text;
+  answerEl.textContent = text;
+  if (!('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'tr-TR';
+  u.rate = 0.9;               // biraz yavaş, yaşlılar için
+  const tr = speechSynthesis.getVoices().find(v => v.lang.startsWith('tr'));
+  if (tr) u.voice = tr;
+  speechSynthesis.speak(u);
+}
+
+// ---------- 2) KOMUTU ANLAMA ----------
+function handle(text) {
+  const t = text.toLocaleLowerCase('tr-TR');
+  heardEl.textContent = 'Duyduğum: “' + text + '”';
+  if (t.includes('imdat') || t.includes('yardım')) {
+    startSOS();
+  } else if (t.includes('iptal') || t.includes('vazgeç')) {
+    cancelSOS();
+  } else if (t.includes('nerede') ||t.includes('kayboldum') || t.includes('konum')) {
+    whereAmI();
+  } else if (t.includes('saat')) {
+    const now = new Date();
+    say('Saat ' + now.getHours() + ' ' + String(now.getMinutes()).padStart(2, '0') + '.');
+  } else if (t.includes('merhaba') || t.includes('selam')) {
+    say('Merhaba! Nerede olduğunu öğrenmek için “Neredeyim” diyebilirsin.');
+  } else {
+    say('Bunu henüz bilmiyorum. “Neredeyim” ya da “Saat kaç” diyebilirsin.');
+  }
+}
+
+// ---------- 3) NEREDEYİM ----------
+function whereAmI() {
+  if (!navigator.geolocation) { say('Bu cihaz konum vermiyor.'); return; }
+  say('Bakıyorum, bir saniye.');
+  navigator.geolocation.getCurrentPosition(async pos => {
+    const { latitude: lat, longitude: lon, accuracy } = pos.coords;
+    try {
+      const url = 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=tr'
+                + '&lat=' + lat + '&lon=' + lon;
+      const r = await fetch(url);
+      const d = await r.json();
+      const a = d.address || {};
+      const parts = [];
+      if (a.amenity || a.shop || a.building) parts.push((a.amenity || a.shop || a.building) + ' yakınındasın');
+      if (a.road) parts.push(a.road + ' üzerindesin');
+      const mah = a.neighbourhood || a.quarter || a.suburb;
+      if (mah) parts.push(mah);
+      const city = a.town || a.city || a.county;
+      if (city) parts.push(city);
+      let msg = parts.length ? 'Şu an ' + parts.join(', ') + '.' : 'Adresi bulamadım.';
+      if (accuracy > 100) msg += ' Konum tam net değil, yaklaşık ' + Math.round(accuracy) + ' metre sapma olabilir.';
+      say(msg);
+    } catch (e) {
+      say('İnternete bağlanamadım. Koordinatların: ' + lat.toFixed(4) + ', ' + lon.toFixed(4));
+    }
+  }, err => {
+    say(err.code === 1 ? 'Konum izni verilmedi. Tarayıcıdan konum iznini açman gerekiyor.'
+                       : 'Konumunu bulamadım, biraz sonra tekrar dene.');
+  }, { enableHighAccuracy: true, timeout: 15000 });
+}
+
+// ---------- 4) DİNLEME (mikrofon) ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+talkBtn.onclick = () => {
+  if (!SR) { say('Bu tarayıcı sesi anlamıyor. Chrome ile aç ya da aşağıya yaz.'); return; }
+  const rec = new SR();
+  rec.lang = 'tr-TR';
+  rec.onstart = () => { talkBtn.classList.add('listening'); talkBtn.textContent = '👂 Dinliyorum…'; };
+  rec.onend   = () => { talkBtn.classList.remove('listening'); talkBtn.textContent = '🎤 Konuş'; };
+  rec.onerror = e => say(e.error === 'not-allowed' ? 'Mikrofon izni verilmedi.' : 'Seni duyamadım, tekrar dener misin?');
+  rec.onresult = e => handle(e.results[0][0].transcript);
+  rec.start();
+};
+
+// ---------- 5) YARDIM ÇAĞIR (SOS) ----------
+const sosPanel = document.getElementById('sosPanel');
+const sosText = document.getElementById('sosText');
+const phoneInput = document.getElementById('phone');
+let sosTimer = null;
+
+function getPhone() { try { return localStorage.getItem('yakinTel') || ''; } catch { return ''; } }
+phoneInput.value = getPhone();
+document.getElementById('phoneForm').onsubmit = e => {
+  e.preventDefault();
+  const n = phoneInput.value.replace(/\s/g, '');
+  try { localStorage.setItem('yakinTel', n); } catch {}
+  say(n ? 'Numara kaydedildi.' : 'Numara silindi.');
+};
+
+function startSOS() {
+  const phone = getPhone();
+  if (!phone) {
+    document.getElementById('settings').open = true;
+    say('Önce ayarlardan bir yakınının numarasını kaydetmen gerekiyor.');
+    return;
+  }
+  if (sosTimer) return;
+  let left = 10;                       // yanlış basmalara karşı 10 saniye
+  sosPanel.hidden = false;
+  say('Yardım çağırıyorum. Vazgeçmek için iptal de ya da iptal düğmesine bas.');
+  const tick = () => { sosText.textContent = left + ' saniye sonra yardım çağrılacak…'; };
+  tick();
+  sosTimer = setInterval(() => {
+    left--;
+    if (left > 0) { tick(); return; }
+    clearInterval(sosTimer); sosTimer = null;
+    sendSOS(phone);
+  }, 1000);
+}
+
+function cancelSOS() {
+  if (!sosTimer) return;
+  clearInterval(sosTimer); sosTimer = null;
+  sosPanel.hidden = true;
+  say('Tamam, iptal ettim.');
+}
+
+function sendSOS(phone) {
+  sosText.textContent = 'Konum alınıyor…';
+  const finish = (link) => {
+    const msg = 'YARDIM! Yardıma ihtiyacım var.' + (link ? ' Konumum: ' + link : '');
+    const smsUrl = 'sms:' + phone + '?body=' + encodeURIComponent(msg);
+    sosText.innerHTML =
+      '<a href="' + smsUrl + '">📩 Mesajı gönder</a><br>' +
+      '<a href="tel:' + phone + '">📞 ' + phone + ' numarasını ara</a>';
+    say('Mesaj hazır. Gönder tuşuna bas.');
+    location.href = smsUrl;            // telefonda mesaj uygulamasını açar
+  };
+  navigator.geolocation.getCurrentPosition(
+    p => finish('https://maps.google.com/?q=' + p.coords.latitude + ',' + p.coords.longitude),
+    () => finish(''),
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+}
+
+document.getElementById('sosBtn').onclick = startSOS;
+document.getElementById('sosCancel').onclick = () => { cancelSOS(); sosPanel.hidden = true; };
+
+document.getElementById('whereBtn').onclick = whereAmI;
+document.getElementById('repeatBtn').onclick = () => say(lastAnswer);
+document.getElementById('typeForm').onsubmit = e => {
+  e.preventDefault();
+  const v = document.getElementById('typed').value.trim();
+  if (v) handle(v);
+};
+</script>
+</body>
+</html>
