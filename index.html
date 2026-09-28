@@ -42,15 +42,33 @@
   details { background: var(--card); border: 2px solid var(--line); border-radius: 16px; padding: 12px 16px; }
   summary { cursor: pointer; font-weight: 600; }
   details form { margin-top: 12px; }
+  #homeBtn { background: var(--card); color: var(--ink); border: 3px solid var(--accent);
+    padding: 20px 12px; font-size: 24px; font-weight: 700; }
+  #navPanel { background: var(--accent); color: var(--accent-ink); border-radius: 16px;
+    padding: 18px; display: grid; gap: 12px; }
+  #navStep { font-size: 26px; font-weight: 700; }
+  #navInfo { font-size: 18px; }
+  #navPanel button { background: var(--accent-ink); color: var(--accent); border: 0; padding: 14px; font-weight: 800; }
+  .setting { display: grid; gap: 8px; margin-top: 12px; }
+  .setting label { font-size: 16px; color: var(--muted); }
+  .setting > button { background: var(--card); color: var(--ink); border: 2px solid var(--line); padding: 14px; font-weight: 600; }
   button:focus-visible, input:focus-visible { outline: 4px solid var(--accent); outline-offset: 2px; }
 </style>
 </head>
 <body>
 <main>
   <h1>Yol Asistanı</h1>
-  <p class="hint">Büyük düğmeye bas ve <b>“Neredeyim?”</b> de.</p>
+  <p class="hint">Büyük düğmeye bas ve konuş: <b>“Neredeyim?”</b>, <b>“Eve götür”</b>, <b>“Yardım”</b></p>
 
   <button id="talk">🎤 Konuş</button>
+
+  <button id="homeBtn">🏠 Eve götür</button>
+
+  <div id="navPanel" hidden>
+    <div id="navStep">Yol hesaplanıyor…</div>
+    <div id="navInfo"></div>
+    <button id="navStop">YOL TARİFİNİ BİTİR</button>
+  </div>
 
   <div class="row">
     <button id="whereBtn">📍 Neredeyim?</button>
@@ -73,11 +91,22 @@
   </div>
 
   <details id="settings">
-    <summary>⚙️ Ayarlar: Yakınımın numarası</summary>
-    <form id="phoneForm">
-      <input id="phone" type="tel" placeholder="05xx xxx xx xx" autocomplete="off">
-      <button type="submit">Kaydet</button>
-    </form>
+    <summary>⚙️ Ayarlar: Ev adresi ve yakınımın numarası</summary>
+    <div class="setting">
+      <label>Ev: <span id="homeLabel">kayıtlı değil</span></label>
+      <button id="saveHereBtn" type="button">📍 Şu an bulunduğum yer evim</button>
+      <form id="homeForm">
+        <input id="homeAddr" placeholder="ya da adres yaz: Kemeraltı Mah., Marmaris" autocomplete="off">
+        <button type="submit">Kaydet</button>
+      </form>
+    </div>
+    <div class="setting">
+      <label>Yakınımın telefon numarası (yardım çağırmak için)</label>
+      <form id="phoneForm">
+        <input id="phone" type="tel" placeholder="05xx xxx xx xx" autocomplete="off">
+        <button type="submit">Kaydet</button>
+      </form>
+    </div>
   </details>
 </main>
 
@@ -108,8 +137,16 @@ function handle(text) {
   if (t.includes('imdat') || t.includes('yardım')) {
     startSOS();
   } else if (t.includes('iptal') || t.includes('vazgeç')) {
-    cancelSOS();
-  } else if (t.includes('nerede') ||t.includes('kayboldum') || t.includes('konum')) {
+    if (sosTimer) cancelSOS(); else stopNav();
+  } else if (t.includes('evim burası') || t.includes('burası evim')) {
+    saveHere();
+  } else if (t.includes('eve') || t.includes('evime')) {
+    goHome();
+  } else if (t.includes('bitir') || t === 'dur') {
+    stopNav();
+  } else if (t.includes('kaldı') || t.includes('ne kadar')) {
+    say(nav ? 'Eve ' + fmtDist(remaining()) + ' kaldı.' : 'Şu an yol tarifi açık değil.');
+  } else if (t.includes('nerede') || t.includes('kayboldum') || t.includes('konum')) {
     whereAmI();
   } else if (t.includes('saat')) {
     const now = new Date();
@@ -228,6 +265,190 @@ function sendSOS(phone) {
 
 document.getElementById('sosBtn').onclick = startSOS;
 document.getElementById('sosCancel').onclick = () => { cancelSOS(); sosPanel.hidden = true; };
+
+// ---------- 6) EVE GÖTÜR (yürüyüş yol tarifi) ----------
+const navPanel = document.getElementById('navPanel');
+const navStep = document.getElementById('navStep');
+const navInfo = document.getElementById('navInfo');
+let nav = null;   // aktif yol tarifi bilgileri
+
+function getHome() { try { return JSON.parse(localStorage.getItem('ev')); } catch { return null; } }
+function setHome(h) {
+  try { localStorage.setItem('ev', JSON.stringify(h)); } catch {}
+  showHome();
+}
+function showHome() {
+  const h = getHome();
+  document.getElementById('homeLabel').textContent = h ? h.label : 'kayıtlı değil';
+}
+showHome();
+
+function saveHere() {
+  say('Konumunu alıyorum.');
+  navigator.geolocation.getCurrentPosition(p => {
+    setHome({ lat: p.coords.latitude, lon: p.coords.longitude, label: 'bulunduğun yer olarak kaydedildi' });
+    say('Tamam, burayı evin olarak kaydettim.');
+  }, () => say('Konum alınamadı, konum iznini kontrol et.'), { enableHighAccuracy: true, timeout: 15000 });
+}
+
+document.getElementById('saveHereBtn').onclick = saveHere;
+document.getElementById('homeForm').onsubmit = async e => {
+  e.preventDefault();
+  const q = document.getElementById('homeAddr').value.trim();
+  if (!q) return;
+  try {
+    const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=tr&accept-language=tr&q=' + encodeURIComponent(q));
+    const d = await r.json();
+    if (!d.length) { say('Bu adresi bulamadım. Mahalle ve ilçe adını da yazmayı dene.'); return; }
+    const label = d[0].display_name.split(',').slice(0, 3).join(',');
+    setHome({ lat: +d[0].lat, lon: +d[0].lon, label });
+    say('Ev adresi kaydedildi: ' + label);
+  } catch { say('İnternete bağlanamadım.'); }
+};
+
+// İki nokta arası mesafe (metre)
+function dist(lat1, lon1, lat2, lon2) {
+  const R = 6371000, toR = x => x * Math.PI / 180;
+  const a = Math.sin(toR(lat2 - lat1) / 2) ** 2 +
+            Math.cos(toR(lat1)) * Math.cos(toR(lat2)) * Math.sin(toR(lon2 - lon1) / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+function fmtDist(m) {
+  if (m < 1000) return Math.max(10, Math.round(m / 10) * 10) + ' metre';
+  return (m / 1000).toFixed(1).replace('.', ',') + ' kilometre';
+}
+
+// Harita servisinin adımlarını Türkçe cümleye çevirir
+function stepText(s) {
+  const type = s.maneuver.type, mod = s.maneuver.modifier || '';
+  const road = s.name ? ' Yol: ' + s.name + '.' : '';
+  if (type === 'arrive') return 'Evine vardın.';
+  if (type === 'depart') return 'Yürümeye başla.' + road;
+  if (type === 'roundabout' || type === 'rotary') return 'Göbeği dolaşarak devam et.' + road;
+  const turns = {
+    'left': 'Sola dön.', 'right': 'Sağa dön.',
+    'slight left': 'Hafif sola dön.', 'slight right': 'Hafif sağa dön.',
+    'sharp left': 'Keskin sola dön.', 'sharp right': 'Keskin sağa dön.',
+    'uturn': 'Geri dön.', 'straight': 'Düz devam et.'
+  };
+  return (turns[mod] || 'Devam et.') + road;
+}
+
+function remaining() {
+  if (!nav) return 0;
+  let m = 0;
+  for (let i = nav.idx + 1; i < nav.steps.length; i++) m += nav.steps[i].distance;
+  return m + (nav.toNext || nav.steps[nav.idx].distance);
+}
+
+async function fetchRoute(lat, lon, home) {
+  const url = 'https://routing.openstreetmap.de/routed-foot/route/v1/foot/' +
+    lon + ',' + lat + ';' + home.lon + ',' + home.lat +
+    '?steps=true&overview=full&geometries=geojson';
+  const r = await fetch(url);
+  const d = await r.json();
+  if (!d.routes || !d.routes.length) throw new Error('rota yok');
+  return d.routes[0];
+}
+
+function goHome() {
+  const home = getHome();
+  if (!home) {
+    document.getElementById('settings').open = true;
+    say('Önce evini kaydetmemiz lazım. Evdeysen “evim burası” de, ya da ayarlardan adresini yaz.');
+    return;
+  }
+  say('Eve giden yolu hesaplıyorum.');
+  navPanel.hidden = false;
+  navStep.textContent = 'Yol hesaplanıyor…';
+  navigator.geolocation.getCurrentPosition(async p => {
+    const { latitude: lat, longitude: lon } = p.coords;
+    if (dist(lat, lon, home.lat, home.lon) < 30) { navPanel.hidden = true; say('Zaten evinin yanındasın.'); return; }
+    try {
+      await startRoute(lat, lon, home, true);
+    } catch {
+      navPanel.hidden = true;
+      say('Yolu hesaplayamadım. İnternet bağlantını kontrol et.');
+    }
+  }, () => { navPanel.hidden = true; say('Konumunu bulamadım.'); }, { enableHighAccuracy: true, timeout: 15000 });
+}
+
+async function startRoute(lat, lon, home, first) {
+  const route = await fetchRoute(lat, lon, home);
+  const steps = route.legs[0].steps;
+  if (!nav) {
+    nav = { watch: navigator.geolocation.watchPosition(onMove, () => {}, { enableHighAccuracy: true, maximumAge: 2000 }) };
+    try { nav.lock = await navigator.wakeLock.request('screen'); } catch {}   // ekran kapanmasın
+  }
+  Object.assign(nav, { home, steps, idx: 0, pre: false, toNext: steps[0].distance,
+                       line: route.geometry.coordinates, lastReroute: Date.now() });
+  const mins = Math.max(1, Math.round(route.duration / 60));
+  const next = steps[1];
+  let msg = (first ? 'Eve ' + fmtDist(route.distance) + ' yol var, yürüyerek yaklaşık ' + mins + ' dakika. ' : 'Yeni yol bulundu. ')
+          + stepText(steps[0]);
+  if (next && next.maneuver.type !== 'arrive') msg += ' ' + fmtDist(steps[0].distance) + ' sonra: ' + stepText(next);
+  navStep.textContent = stepText(steps[0]);
+  navInfo.textContent = 'Kalan: ' + fmtDist(route.distance);
+  say(msg);
+}
+
+function onMove(p) {
+  if (!nav || !nav.steps) return;
+  const { latitude: lat, longitude: lon, accuracy } = p.coords;
+
+  // Eve vardı mı?
+  if (dist(lat, lon, nav.home.lat, nav.home.lon) < 20) {
+    say('Evine vardın. Aferin!');
+    stopNav(true);
+    return;
+  }
+
+  const next = nav.steps[nav.idx + 1];
+  if (!next) return;
+  const [nlon, nlat] = next.maneuver.location;
+  const d = dist(lat, lon, nlat, nlon);
+  nav.toNext = d;
+  navInfo.textContent = 'Sonraki dönüşe ' + fmtDist(d) + ' · Kalan: ' + fmtDist(remaining());
+
+  // Dönüşe yaklaşınca önceden haber ver
+  if (!nav.pre && d < 50 && d > 20) {
+    nav.pre = true;
+    say('Birazdan ' + stepText(next).toLocaleLowerCase('tr-TR'));
+  }
+  // Dönüş noktasına gelince
+  if (d <= 20) {
+    nav.idx++;
+    nav.pre = false;
+    const after = nav.steps[nav.idx + 1];
+    navStep.textContent = stepText(next);
+    if (next.maneuver.type === 'arrive') { say('Evine vardın. Aferin!'); stopNav(true); return; }
+    say(stepText(next) + (after ? ' Sonra ' + fmtDist(next.distance) + ' ilerle.' : ''));
+    return;
+  }
+
+  // Yoldan çıktı mı? (rotaya en yakın nokta 45 metreden uzaksa yeniden hesapla)
+  if (accuracy < 40 && Date.now() - nav.lastReroute > 30000) {
+    let min = Infinity;
+    for (const [x, y] of nav.line) min = Math.min(min, dist(lat, lon, y, x));
+    if (min > 45) {
+      nav.lastReroute = Date.now();
+      say('Yoldan biraz çıktın, yeni yol hesaplıyorum.');
+      startRoute(lat, lon, nav.home, false).catch(() => {});
+    }
+  }
+}
+
+function stopNav(arrived) {
+  if (!nav) return;
+  navigator.geolocation.clearWatch(nav.watch);
+  try { nav.lock && nav.lock.release(); } catch {}
+  nav = null;
+  navPanel.hidden = true;
+  if (!arrived) say('Yol tarifini bitirdim.');
+}
+
+document.getElementById('homeBtn').onclick = goHome;
+document.getElementById('navStop').onclick = () => stopNav();
 
 document.getElementById('whereBtn').onclick = whereAmI;
 document.getElementById('repeatBtn').onclick = () => say(lastAnswer);
