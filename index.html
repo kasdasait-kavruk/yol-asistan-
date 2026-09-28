@@ -51,9 +51,18 @@
   #navPanel button { background: var(--accent-ink); color: var(--accent); border: 0; padding: 14px; font-weight: 800; }
   .setting { display: grid; gap: 8px; margin-top: 12px; }
   .setting label { font-size: 16px; color: var(--muted); }
-  .setting > button { background: var(--card); color: var(--ink); border: 2px solid var(--line); padding: 14px; font-weight: 600; }
+  .setting > button, .results button, #mapBox button { background: var(--card); color: var(--ink); border: 2px solid var(--line); padding: 14px; font-weight: 600; text-align: left; }
+  .results { display: grid; gap: 8px; }
+  .results:empty { display: none; }
+  #mapBox { display: grid; gap: 8px; }
+  #mapBox[hidden] { display: none; }
+  #map { height: 320px; border-radius: 12px; border: 2px solid var(--line); }
+  .maphint { margin: 0; font-size: 16px; color: var(--muted); }
+  #mapSaveBtn:disabled { opacity: .5; }
   button:focus-visible, input:focus-visible { outline: 4px solid var(--accent); outline-offset: 2px; }
 </style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 </head>
 <body>
 <main>
@@ -96,9 +105,16 @@
       <label>Ev: <span id="homeLabel">kayıtlı değil</span></label>
       <button id="saveHereBtn" type="button">📍 Şu an bulunduğum yer evim</button>
       <form id="homeForm">
-        <input id="homeAddr" placeholder="ya da adres yaz: Kemeraltı Mah., Marmaris" autocomplete="off">
-        <button type="submit">Kaydet</button>
+        <input id="homeAddr" placeholder="ya da adres yaz: Kemeraltı, Marmaris" autocomplete="off">
+        <button type="submit">Ara</button>
       </form>
+      <div id="homeResults" class="results"></div>
+      <button id="mapPickBtn" type="button">🗺️ Evimi haritadan seç</button>
+      <div id="mapBox" hidden>
+        <p class="maphint">Haritada evinin olduğu yere dokun, sonra “Bu nokta evim” düğmesine bas.</p>
+        <div id="map"></div>
+        <button id="mapSaveBtn" type="button" disabled>✅ Bu nokta evim</button>
+      </div>
     </div>
     <div class="setting">
       <label>Yakınımın telefon numarası (yardım çağırmak için)</label>
@@ -292,19 +308,120 @@ function saveHere() {
 }
 
 document.getElementById('saveHereBtn').onclick = saveHere;
+
+// --- Adres arama: kısaltmaları açar, birkaç farklı şekilde dener, sonuçları listeler ---
+function normalizeAddr(q) {
+  return q.toLocaleLowerCase('tr-TR')
+    .replace(/\bmah\.?(?=\s|,|$)/g, 'mahallesi').replace(/\bmh\.?(?=\s|,|$)/g, 'mahallesi')
+    .replace(/\bcad\.?(?=\s|,|$)/g, 'caddesi').replace(/\bcd\.?(?=\s|,|$)/g, 'caddesi')
+    .replace(/\bsok\.?(?=\s|,|$)/g, 'sokak').replace(/\bsk\.?(?=\s|,|$)/g, 'sokak')
+    .replace(/\bno\s*:?\s*\d+\S*/g, '').replace(/\/\s*\d+/g, '')
+    .replace(/\s+/g, ' ').trim();
+}
+function addrVariants(q) {
+  const n = normalizeAddr(q);
+  const words = n.replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+  const city = n.includes(',') ? n.split(',').filter(s => s.trim()).slice(-1)[0].trim() : words.split(' ').slice(-1)[0];
+  const mah = (n.match(/([^\s,]+(?:\s[^\s,]+)?)\s+mahallesi/) || [])[1];
+  const v = [words];
+  if (mah) {
+    v.push(mah + ' mahallesi ' + city);       // sokak olmadan: mahalle + ilçe
+    v.push(mah + ' ' + city);
+  }
+  v.push(words.replace(/\b(mahallesi|caddesi|sokak|bulvarı)\b/g, '').replace(/\s+/g, ' '));
+  return [...new Set(v.map(s => s.trim()).filter(s => s.length > 2 && (s !== city || !words.includes(' '))))];
+}
+function myPos() {
+  return new Promise(res => navigator.geolocation
+    ? navigator.geolocation.getCurrentPosition(p => res(p.coords), () => res(null), { timeout: 8000, maximumAge: 600000 })
+    : res(null));
+}
+async function searchPhoton(q, pos) {
+  let url = 'https://photon.komoot.io/api/?limit=5&q=' + encodeURIComponent(q);
+  if (pos) url += '&lat=' + pos.latitude + '&lon=' + pos.longitude;
+  const d = await (await fetch(url)).json();
+  return (d.features || [])
+    .filter(f => (f.properties.countrycode || '').toUpperCase() === 'TR')
+    .map(f => {
+      const p = f.properties;
+      const label = [p.name, p.street, p.district || p.locality, p.city || p.county]
+        .filter((x, i, a) => x && a.indexOf(x) === i).join(', ');
+      return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], label };
+    });
+}
+async function searchNominatim(q) {
+  const d = await (await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=tr&accept-language=tr&q=' + encodeURIComponent(q))).json();
+  return d.map(x => ({ lat: +x.lat, lon: +x.lon, label: x.display_name.split(',').slice(0, 4).join(',') }));
+}
+
+const resultsEl = document.getElementById('homeResults');
 document.getElementById('homeForm').onsubmit = async e => {
   e.preventDefault();
   const q = document.getElementById('homeAddr').value.trim();
   if (!q) return;
+  resultsEl.innerHTML = '';
+  say('Adresi arıyorum.');
+  const pos = await myPos();
+  let found = [];
   try {
-    const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=tr&accept-language=tr&q=' + encodeURIComponent(q));
-    const d = await r.json();
-    if (!d.length) { say('Bu adresi bulamadım. Mahalle ve ilçe adını da yazmayı dene.'); return; }
-    const label = d[0].display_name.split(',').slice(0, 3).join(',');
-    setHome({ lat: +d[0].lat, lon: +d[0].lon, label });
-    say('Ev adresi kaydedildi: ' + label);
-  } catch { say('İnternete bağlanamadım.'); }
+    for (const v of addrVariants(q)) {
+      try { found = await searchPhoton(v, pos); } catch {}
+      if (!found.length) { try { found = await searchNominatim(v); } catch {} }
+      if (found.length) break;
+    }
+  } catch {}
+  if (!found.length) {
+    say('Bu adresi bulamadım. Evini haritadan seçebilirsin.');
+    openMap();
+    return;
+  }
+  say(found.length === 1 ? 'Bir sonuç buldum, doğruysa üzerine dokun.' : found.length + ' sonuç buldum. Doğru olanın üzerine dokun.');
+  found.forEach(r => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = '🏠 ' + r.label;
+    b.onclick = () => { setHome(r); resultsEl.innerHTML = ''; say('Ev adresi kaydedildi: ' + r.label); };
+    resultsEl.appendChild(b);
+  });
+  const m = document.createElement('button');
+  m.type = 'button';
+  m.textContent = '🗺️ Hiçbiri değil, haritadan seçeceğim';
+  m.onclick = () => { resultsEl.innerHTML = ''; openMap(); };
+  resultsEl.appendChild(m);
 };
+
+// --- Haritadan seçme ---
+let map = null, pin = null, picked = null;
+async function openMap() {
+  const box = document.getElementById('mapBox');
+  box.hidden = false;
+  document.getElementById('settings').open = true;
+  if (typeof L === 'undefined') { say('Harita yüklenemedi, internet bağlantını kontrol et.'); return; }
+  if (!map) {
+    const h = getHome();
+    const pos = h ? { latitude: h.lat, longitude: h.lon } : await myPos();
+    const center = pos ? [pos.latitude, pos.longitude] : [36.855, 28.27];   // yoksa Marmaris
+    map = L.map('map').setView(center, 17);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '© OpenStreetMap'
+    }).addTo(map);
+    map.on('click', e => {
+      picked = e.latlng;
+      if (pin) pin.setLatLng(picked); else pin = L.marker(picked).addTo(map);
+      document.getElementById('mapSaveBtn').disabled = false;
+    });
+  }
+  setTimeout(() => map.invalidateSize(), 100);
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+document.getElementById('mapPickBtn').onclick = openMap;
+document.getElementById('mapSaveBtn').onclick = () => {
+  if (!picked) return;
+  setHome({ lat: picked.lat, lon: picked.lng, label: 'haritadan seçildi' });
+  document.getElementById('mapBox').hidden = true;
+  say('Tamam, seçtiğin noktayı evin olarak kaydettim.');
+};
+
 
 // İki nokta arası mesafe (metre)
 function dist(lat1, lon1, lat2, lon2) {
