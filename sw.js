@@ -1,5 +1,5 @@
 // Uygulamayı telefona kurulabilir yapar; internet yokken son açılan sürümü gösterir.
-const CACHE = 'yol-asistani-v2';
+const CACHE = 'yol-asistani-v3';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './aile.html', './firebase-config.js'];
 
 self.addEventListener('install', e => {

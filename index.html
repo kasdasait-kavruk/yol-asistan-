@@ -735,7 +735,16 @@ async function startShare(silent) {
   try {
     await fbReady();
   } catch (e) {
-    say('Aile takibine bağlanamadım. İnternet bağlantını kontrol et.');
+    const c = (e && (e.code || e.message)) || 'bilinmeyen';
+    const why = c.includes('operation-not-allowed') || c.includes('admin-restricted')
+        ? 'Firebase’de Anonymous giriş kapalı.'
+      : c.includes('unauthorized-domain') ? 'Bu site Firebase’de izinli alan adı değil.'
+      : c.includes('api-key') ? 'Firebase anahtarı hatalı.'
+      : c.includes('firebase yok') ? 'Firebase yüklenemedi, sayfayı yenile.'
+      : c.includes('network') ? 'İnternet bağlantısı yok.'
+      : '';
+    familyStatus.textContent = 'Hata kodu: ' + c;
+    say('Aile takibine bağlanamadım. ' + (why || 'Ekrandaki hata kodunu kontrol et.'));
     return;
   }
   share.code = lsGet('takipKodu') || newCode();
