@@ -65,6 +65,11 @@
   #map { height: 320px; border-radius: 12px; border: 2px solid var(--line); }
   .maphint { margin: 0; font-size: 16px; color: var(--muted); }
   #mapSaveBtn:disabled { opacity: .5; }
+  #familyBox { display: grid; gap: 10px; }
+  #familyBox .on { background: var(--accent); color: var(--accent-ink); border: 0; padding: 16px; font-weight: 700; }
+  #familyBox .off { background: var(--card); color: var(--ink); border: 2px solid var(--line); padding: 14px; font-weight: 600; }
+  #familyLink { font-size: 15px; word-break: break-all; background: var(--bg); padding: 10px; border-radius: 10px; user-select: all; }
+  #familyStatus { font-size: 16px; color: var(--muted); margin: 0; }
   #installBtn { background: var(--ink); color: var(--bg); border: 0; padding: 16px; font-weight: 700; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   .chips button { background: var(--bg); color: var(--ink); border: 2px solid var(--line);
@@ -77,6 +82,10 @@
 </style>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="firebase-config.js"></script>
 </head>
 <body>
 <main>
@@ -119,6 +128,22 @@
     <div id="sosText">Yardım çağırılıyor…</div>
     <button id="sosCancel">İPTAL ET</button>
   </div>
+
+  <details id="family">
+    <summary>👨‍👩‍👧 Aile takibi: Konumumu paylaş</summary>
+    <div id="familyBox" class="setting">
+      <label for="myName">Adım (ailen bu adı görür)</label>
+      <input id="myName" placeholder="Örn: Ayşe Teyze" autocomplete="off">
+      <button id="shareBtn" class="on" type="button">📡 Konumumu ailemle paylaşmaya başla</button>
+      <p id="familyStatus">Paylaşım kapalı.</p>
+      <div id="familyShare" hidden>
+        <div>Bu linki yakınına gönder, seni haritada görsün:</div>
+        <div id="familyLink"></div>
+        <button id="copyLinkBtn" class="off" type="button">📋 Linki kopyala</button>
+        <button id="sendLinkBtn" class="off" type="button">💬 WhatsApp ile gönder</button>
+      </div>
+    </div>
+  </details>
 
   <button id="installBtn" hidden>📲 Telefona uygulama olarak kur</button>
 
@@ -291,7 +316,9 @@ function cancelSOS() {
 function sendSOS(phone) {
   sosText.textContent = 'Konum alınıyor…';
   const finish = (link) => {
-    const msg = 'YARDIM! Yardıma ihtiyacım var.' + (link ? ' Konumum: ' + link : '');
+    familySOS();
+    const msg = 'YARDIM! Yardıma ihtiyacım var.' + (link ? ' Konumum: ' + link : '') +
+                (share.on ? ' Canlı takip: ' + familyUrl() : '');
     const smsUrl = 'sms:' + phone + '?body=' + encodeURIComponent(msg);
     sosText.innerHTML =
       '<a href="' + smsUrl + '">📩 Mesajı gönder</a><br>' +
@@ -675,6 +702,103 @@ function goToPlace(pl) {
   navigateTo({ lat: pl.lat, lon: pl.lon, to: 'Oraya',
                arrive: 'Vardın. Burası ' + pl.name + '.', near: 'Zaten ' + pl.name + ' yanındasın.' });
 }
+
+// ---------- 9) AİLE TAKİBİ (Firebase) ----------
+const share = { on: false, code: null, watch: null, last: null, db: null, uid: null };
+const shareBtn = document.getElementById('shareBtn');
+const familyStatus = document.getElementById('familyStatus');
+const myName = document.getElementById('myName');
+function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function lsSet(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
+myName.value = lsGet('adim') || '';
+myName.onchange = () => lsSet('adim', myName.value.trim());
+
+function familyUrl() {
+  return location.href.split('#')[0].split('?')[0].replace(/index\.html$/, '') + 'aile.html#' + share.code;
+}
+function newCode() {
+  const a = new Uint8Array(18); crypto.getRandomValues(a);
+  return Array.from(a, b => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
+}
+async function fbReady() {
+  if (typeof firebase === 'undefined') throw new Error('firebase yok');
+  if (!share.db) {
+    if (!firebase.apps.length) firebase.initializeApp(window.FIREBASE_CONFIG);
+    const cred = await firebase.auth().signInAnonymously();
+    share.uid = cred.user.uid;
+    share.db = firebase.database();
+  }
+}
+function ref() { return share.db.ref('tracks/' + share.code); }
+
+async function startShare(silent) {
+  try {
+    await fbReady();
+  } catch (e) {
+    say('Aile takibine bağlanamadım. İnternet bağlantını kontrol et.');
+    return;
+  }
+  share.code = lsGet('takipKodu') || newCode();
+  lsSet('takipKodu', share.code);
+  share.on = true;
+  lsSet('paylas', '1');
+  share.watch = navigator.geolocation.watchPosition(sendPos, () => {
+    familyStatus.textContent = 'Konum alınamıyor, konum iznini kontrol et.';
+  }, { enableHighAccuracy: true, maximumAge: 10000 });
+  shareBtn.textContent = '⏹️ Paylaşımı durdur';
+  shareBtn.className = 'off';
+  document.getElementById('familyLink').textContent = familyUrl();
+  document.getElementById('familyShare').hidden = false;
+  familyStatus.textContent = 'Paylaşım açık. Konum gönderiliyor…';
+  if (!silent) say('Konumunu ailenle paylaşıyorum. Aşağıdaki linki yakınına gönder.');
+}
+
+function sendPos(p) {
+  if (!share.on) return;
+  const { latitude: lat, longitude: lon, accuracy } = p.coords;
+  const now = Date.now(), l = share.last;
+  // Çok sık yazmamak için: 15 saniyeden önce gönderme; 10 metre kıpırdamadıysa dakikada bir gönder
+  if (l && (now - l.t < 15000 || (dist(lat, lon, l.lat, l.lon) < 10 && now - l.t < 60000))) return;
+  share.last = { lat, lon, t: now };
+  ref().update({
+    owner: share.uid, lat, lon, acc: Math.round(accuracy),
+    name: myName.value.trim() || 'Yakının',
+    t: firebase.database.ServerValue.TIMESTAMP
+  }).then(() => {
+    familyStatus.textContent = 'Paylaşım açık. Son gönderim: ' + new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  }).catch(() => {
+    familyStatus.textContent = 'Konum gönderilemedi. Veritabanı kurallarını kontrol et.';
+  });
+}
+
+function stopShare() {
+  if (share.watch !== null) navigator.geolocation.clearWatch(share.watch);
+  share.watch = null;
+  if (share.db && share.code) ref().remove().catch(() => {});
+  share.on = false;
+  share.last = null;
+  lsSet('paylas', null);
+  shareBtn.textContent = '📡 Konumumu ailemle paylaşmaya başla';
+  shareBtn.className = 'on';
+  document.getElementById('familyShare').hidden = true;
+  familyStatus.textContent = 'Paylaşım kapalı.';
+  say('Konum paylaşımını durdurdum.');
+}
+
+function familySOS() {
+  if (share.on && share.db) ref().update({ owner: share.uid, sos: firebase.database.ServerValue.TIMESTAMP }).catch(() => {});
+}
+
+shareBtn.onclick = () => share.on ? stopShare() : startShare(false);
+document.getElementById('copyLinkBtn').onclick = async () => {
+  try { await navigator.clipboard.writeText(familyUrl()); say('Link kopyalandı.'); }
+  catch { getSelection().selectAllChildren(document.getElementById('familyLink')); say('Linki seçtim, kopyalayabilirsin.'); }
+};
+document.getElementById('sendLinkBtn').onclick = () => {
+  const text = (myName.value.trim() || 'Ben') + ' konumunu seninle paylaşıyor: ' + familyUrl();
+  window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+};
+if (lsGet('paylas') === '1') startShare(true);   // sayfa yeniden açılınca paylaşıma devam et
 
 // ---------- 8) TELEFONA KURULUM ----------
 let installEvent = null;

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aile Takibi · Yol Asistanı</title>
+<meta name="theme-color" content="#0B6E4F">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root { --bg: #F3F6F4; --ink: #10231B; --muted: #4B5F56; --accent: #0B6E4F; --card: #FFFFFF; --line: #D4DED9; --warn: #9A6400; --sos: #C62828; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0E1714; --ink: #EAF2EE; --muted: #A5B8AF; --accent: #3FBF8F; --card: #16231E; --line: #2A3B34; --warn: #E0A43A; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 18px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 20px 16px 40px; display: grid; gap: 14px; }
+  h1 { font-size: 26px; margin: 0; }
+  #status { margin: 0; color: var(--muted); }
+  #status.old { color: var(--warn); font-weight: 600; }
+  #sos { background: var(--sos); color: #fff; border-radius: 14px; padding: 16px; font-size: 22px; font-weight: 800; }
+  #sos[hidden] { display: none; }
+  #map { height: 60vh; min-height: 320px; border-radius: 14px; border: 2px solid var(--line); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row a { flex: 1 1 200px; text-align: center; text-decoration: none; background: var(--card); color: var(--ink);
+    border: 2px solid var(--line); border-radius: 12px; padding: 14px; font-weight: 600; }
+  .row a.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #empty { background: var(--card); border: 2px solid var(--line); border-radius: 14px; padding: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Aile Takibi</h1>
+  <p id="status">Bağlanıyor…</p>
+  <div id="sos" hidden>🆘 YARDIM İSTEDİ! Hemen ara ya da yanına git.</div>
+  <div id="map"></div>
+  <div class="row">
+    <a id="gmaps" class="primary" href="#" target="_blank" rel="noopener">🧭 Yanına yol tarifi al</a>
+    <a id="center" href="#">📍 Haritayı ortala</a>
+  </div>
+  <div id="empty" hidden></div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+const code = location.hash.slice(1);
+const statusEl = document.getElementById('status');
+const emptyEl = document.getElementById('empty');
+let data = null, marker = null, circle = null, first = true;
+
+const map = L.map('map').setView([36.855, 28.27], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+
+function ago(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return 'az önce';
+  const m = Math.round(s / 60);
+  if (m < 60) return m + ' dakika önce';
+  return Math.round(m / 60) + ' saat önce';
+}
+function showEmpty(text) { emptyEl.textContent = text; emptyEl.hidden = false; }
+
+function render() {
+  if (!data) return;
+  const age = Date.now() - data.t;
+  document.getElementById('title').textContent = (data.name || 'Yakının') + ' nerede?';
+  statusEl.textContent = 'Son konum: ' + ago(age) + (data.acc ? ' · yaklaşık ' + data.acc + ' m hassasiyet' : '');
+  statusEl.className = age > 10 * 60000 ? 'old' : '';
+  if (age > 10 * 60000) statusEl.textContent += ' · Konum güncel değil. Telefonu kapalı ya da uygulama kapanmış olabilir.';
+  document.getElementById('sos').hidden = !(data.sos && Date.now() - data.sos < 30 * 60000);
+}
+
+if (!code || code.length < 20) {
+  statusEl.textContent = '';
+  showEmpty('Bu link eksik. Yakınından, uygulamadaki “Aile takibi” bölümündeki linki tekrar göndermesini iste.');
+} else {
+  firebase.initializeApp(window.FIREBASE_CONFIG);
+  firebase.database().ref('tracks/' + code).on('value', snap => {
+    data = snap.val();
+    if (!data || data.lat == null) {
+      statusEl.textContent = '';
+      showEmpty('Şu an konum paylaşılmıyor. Yakınının uygulamada paylaşımı açması gerekiyor.');
+      return;
+    }
+    emptyEl.hidden = true;
+    const pos = [data.lat, data.lon];
+    if (!marker) { marker = L.marker(pos).addTo(map); circle = L.circle(pos, { radius: data.acc || 20, weight: 1 }).addTo(map); }
+    else { marker.setLatLng(pos); circle.setLatLng(pos).setRadius(data.acc || 20); }
+    marker.bindPopup(data.name || 'Yakının');
+    if (first) { map.setView(pos, 17); first = false; }
+    document.getElementById('gmaps').href = 'https://www.google.com/maps/dir/?api=1&travelmode=walking&destination=' + data.lat + ',' + data.lon;
+    render();
+  }, () => {
+    statusEl.textContent = '';
+    showEmpty('Bağlanılamadı. İnternet bağlantını kontrol et.');
+  });
+  setInterval(render, 10000);
+}
+
+document.getElementById('center').onclick = e => {
+  e.preventDefault();
+  if (data) map.setView([data.lat, data.lon], 17);
+};
+</script>
+</body>
+</html>
