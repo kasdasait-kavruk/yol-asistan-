@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Yol Asistanı</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0B6E4F">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Yol Asistanı">
 <style>
   :root {
     --bg: #F3F6F4; --ink: #10231B; --muted: #4B5F56;
@@ -59,6 +65,14 @@
   #map { height: 320px; border-radius: 12px; border: 2px solid var(--line); }
   .maphint { margin: 0; font-size: 16px; color: var(--muted); }
   #mapSaveBtn:disabled { opacity: .5; }
+  #installBtn { background: var(--ink); color: var(--bg); border: 0; padding: 16px; font-weight: 700; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .chips button { background: var(--bg); color: var(--ink); border: 2px solid var(--line);
+    padding: 12px 14px; font-size: 18px; font-weight: 600; border-radius: 999px; }
+  #placesPanel { display: grid; gap: 8px; }
+  #placesPanel[hidden] { display: none; }
+  #placesPanel button { background: var(--card); color: var(--ink); border: 2px solid var(--accent);
+    padding: 14px; text-align: left; font-weight: 600; }
   button:focus-visible, input:focus-visible { outline: 4px solid var(--accent); outline-offset: 2px; }
 </style>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
@@ -67,11 +81,18 @@
 <body>
 <main>
   <h1>Yol Asistanı</h1>
-  <p class="hint">Büyük düğmeye bas ve konuş: <b>“Neredeyim?”</b>, <b>“Eve götür”</b>, <b>“Yardım”</b></p>
+  <p class="hint">Büyük düğmeye bas ve konuş: <b>“Neredeyim?”</b>, <b>“Eve götür”</b>, <b>“En yakın eczane”</b>, <b>“Yardım”</b></p>
 
   <button id="talk">🎤 Konuş</button>
 
   <button id="homeBtn">🏠 Eve götür</button>
+
+  <details id="nearby">
+    <summary>🔎 Yakınımda ne var?</summary>
+    <div id="placeChips" class="chips"></div>
+  </details>
+
+  <div id="placesPanel" hidden></div>
 
   <div id="navPanel" hidden>
     <div id="navStep">Yol hesaplanıyor…</div>
@@ -98,6 +119,8 @@
     <div id="sosText">Yardım çağırılıyor…</div>
     <button id="sosCancel">İPTAL ET</button>
   </div>
+
+  <button id="installBtn" hidden>📲 Telefona uygulama olarak kur</button>
 
   <details id="settings">
     <summary>⚙️ Ayarlar: Ev adresi ve yakınımın numarası</summary>
@@ -154,14 +177,18 @@ function handle(text) {
     startSOS();
   } else if (t.includes('iptal') || t.includes('vazgeç')) {
     if (sosTimer) cancelSOS(); else stopNav();
+  } else if (findCategory(t)) {
+    findNearby(findCategory(t));
   } else if (t.includes('evim burası') || t.includes('burası evim')) {
     saveHere();
   } else if (t.includes('eve') || t.includes('evime')) {
     goHome();
+  } else if (t.includes('götür') && lastPlaces.length) {
+    goToPlace(lastPlaces[0]);
   } else if (t.includes('bitir') || t === 'dur') {
     stopNav();
   } else if (t.includes('kaldı') || t.includes('ne kadar')) {
-    say(nav ? 'Eve ' + fmtDist(remaining()) + ' kaldı.' : 'Şu an yol tarifi açık değil.');
+    say(nav ? nav.home.to + ' ' + fmtDist(remaining()) + ' kaldı.' : 'Şu an yol tarifi açık değil.');
   } else if (t.includes('nerede') || t.includes('kayboldum') || t.includes('konum')) {
     whereAmI();
   } else if (t.includes('saat')) {
@@ -439,7 +466,7 @@ function fmtDist(m) {
 function stepText(s) {
   const type = s.maneuver.type, mod = s.maneuver.modifier || '';
   const road = s.name ? ' Yol: ' + s.name + '.' : '';
-  if (type === 'arrive') return 'Evine vardın.';
+  if (type === 'arrive') return 'Vardın.';
   if (type === 'depart') return 'Yürümeye başla.' + road;
   if (type === 'roundabout' || type === 'rotary') return 'Göbeği dolaşarak devam et.' + road;
   const turns = {
@@ -475,14 +502,20 @@ function goHome() {
     say('Önce evini kaydetmemiz lazım. Evdeysen “evim burası” de, ya da ayarlardan adresini yaz.');
     return;
   }
-  say('Eve giden yolu hesaplıyorum.');
+  navigateTo({ lat: home.lat, lon: home.lon, to: 'Eve', arrive: 'Evine vardın. Aferin!', near: 'Zaten evinin yanındasın.' });
+}
+
+// Herhangi bir hedefe yürüyüş yol tarifi başlatır
+function navigateTo(dest) {
+  if (nav) stopNav(true);
+  say('Yolu hesaplıyorum.');
   navPanel.hidden = false;
   navStep.textContent = 'Yol hesaplanıyor…';
   navigator.geolocation.getCurrentPosition(async p => {
     const { latitude: lat, longitude: lon } = p.coords;
-    if (dist(lat, lon, home.lat, home.lon) < 30) { navPanel.hidden = true; say('Zaten evinin yanındasın.'); return; }
+    if (dist(lat, lon, dest.lat, dest.lon) < 30) { navPanel.hidden = true; say(dest.near); return; }
     try {
-      await startRoute(lat, lon, home, true);
+      await startRoute(lat, lon, dest, true);
     } catch {
       navPanel.hidden = true;
       say('Yolu hesaplayamadım. İnternet bağlantını kontrol et.');
@@ -501,7 +534,7 @@ async function startRoute(lat, lon, home, first) {
                        line: route.geometry.coordinates, lastReroute: Date.now() });
   const mins = Math.max(1, Math.round(route.duration / 60));
   const next = steps[1];
-  let msg = (first ? 'Eve ' + fmtDist(route.distance) + ' yol var, yürüyerek yaklaşık ' + mins + ' dakika. ' : 'Yeni yol bulundu. ')
+  let msg = (first ? home.to + ' ' + fmtDist(route.distance) + ' yol var, yürüyerek yaklaşık ' + mins + ' dakika. ' : 'Yeni yol bulundu. ')
           + stepText(steps[0]);
   if (next && next.maneuver.type !== 'arrive') msg += ' ' + fmtDist(steps[0].distance) + ' sonra: ' + stepText(next);
   navStep.textContent = stepText(steps[0]);
@@ -513,9 +546,9 @@ function onMove(p) {
   if (!nav || !nav.steps) return;
   const { latitude: lat, longitude: lon, accuracy } = p.coords;
 
-  // Eve vardı mı?
+  // Hedefe vardı mı?
   if (dist(lat, lon, nav.home.lat, nav.home.lon) < 20) {
-    say('Evine vardın. Aferin!');
+    say(nav.home.arrive);
     stopNav(true);
     return;
   }
@@ -538,7 +571,7 @@ function onMove(p) {
     nav.pre = false;
     const after = nav.steps[nav.idx + 1];
     navStep.textContent = stepText(next);
-    if (next.maneuver.type === 'arrive') { say('Evine vardın. Aferin!'); stopNav(true); return; }
+    if (next.maneuver.type === 'arrive') { say(nav.home.arrive); stopNav(true); return; }
     say(stepText(next) + (after ? ' Sonra ' + fmtDist(next.distance) + ' ilerle.' : ''));
     return;
   }
@@ -566,6 +599,100 @@ function stopNav(arrived) {
 
 document.getElementById('homeBtn').onclick = goHome;
 document.getElementById('navStop').onclick = () => stopNav();
+
+// ---------- 7) YAKINIMDA NE VAR ----------
+const PLACES = [
+  { keys: ['eczane'], name: 'eczane', icon: '💊', q: 'nwr[amenity=pharmacy]' },
+  { keys: ['market', 'bakkal'], name: 'market', icon: '🛒', q: 'nwr[shop~"^(supermarket|convenience|grocery)$"]' },
+  { keys: ['hastane'], name: 'hastane', icon: '🏥', q: 'nwr[amenity=hospital]' },
+  { keys: ['sağlık', 'doktor', 'hekim'], name: 'sağlık merkezi', icon: '🩺', q: 'nwr[amenity~"^(clinic|doctors)$"]' },
+  { keys: ['durak', 'otobüs', 'dolmuş'], name: 'durak', icon: '🚌', q: 'nwr[highway=bus_stop]' },
+  { keys: ['polis', 'karakol', 'jandarma'], name: 'polis', icon: '👮', q: 'nwr[amenity=police]' },
+  { keys: ['atm', 'bankamatik', 'para çek'], name: 'ATM', icon: '🏧', q: 'nwr[amenity=atm]' },
+  { keys: ['cami'], name: 'cami', icon: '🕌', q: 'nwr[amenity=place_of_worship][religion=muslim]' },
+  { keys: ['tuvalet', 'wc'], name: 'tuvalet', icon: '🚻', q: 'nwr[amenity=toilets]' },
+  { keys: ['fırın', 'ekmek'], name: 'fırın', icon: '🥖', q: 'nwr[shop=bakery]' }
+];
+let lastPlaces = [];
+const placesPanel = document.getElementById('placesPanel');
+
+function findCategory(t) { return PLACES.find(c => c.keys.some(k => t.includes(k))); }
+
+// Kategori düğmeleri
+PLACES.forEach(c => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = c.icon + ' ' + c.name[0].toLocaleUpperCase('tr-TR') + c.name.slice(1);
+  b.onclick = () => findNearby(c);
+  document.getElementById('placeChips').appendChild(b);
+});
+
+async function overpass(cat, lat, lon, radius) {
+  const q = '[out:json][timeout:20];(' + cat.q + '(around:' + radius + ',' + lat + ',' + lon + '););out center 40;';
+  const r = await fetch('https://overpass-api.de/api/interpreter', {
+    method: 'POST', body: 'data=' + encodeURIComponent(q),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+  });
+  const d = await r.json();
+  return d.elements.map(e => {
+    const plat = e.lat ?? e.center?.lat, plon = e.lon ?? e.center?.lon;
+    const tg = e.tags || {};
+    return { lat: plat, lon: plon, name: tg.name || cat.name, street: tg['addr:street'] || '',
+             d: dist(lat, lon, plat, plon) };
+  }).filter(p => p.lat).sort((a, b) => a.d - b.d);
+}
+
+function findNearby(cat) {
+  say('En yakın ' + cat.name + ' için bakıyorum.');
+  placesPanel.hidden = true;
+  navigator.geolocation.getCurrentPosition(async p => {
+    const { latitude: lat, longitude: lon } = p.coords;
+    try {
+      let list = await overpass(cat, lat, lon, 1000);
+      if (!list.length) list = await overpass(cat, lat, lon, 3000);
+      if (!list.length) { say('Yakınında ' + cat.name + ' bulamadım.'); return; }
+      lastPlaces = list.slice(0, 3);
+      const f = lastPlaces[0];
+      say('En yakın ' + cat.name + ': ' + f.name + ', ' + fmtDist(f.d) + ' uzakta.' +
+          (f.street ? ' ' + f.street + ' üzerinde.' : '') +
+          ' Götürmemi istersen “götür” de ya da düğmeye bas.');
+      placesPanel.innerHTML = '';
+      lastPlaces.forEach(pl => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = '🚶 ' + pl.name + ' · ' + fmtDist(pl.d) + ' · Götür';
+        b.onclick = () => goToPlace(pl);
+        placesPanel.appendChild(b);
+      });
+      placesPanel.hidden = false;
+      document.getElementById('nearby').open = false;
+    } catch { say('Şu an arayamadım, internet bağlantını kontrol et.'); }
+  }, () => say('Konumunu bulamadım.'), { enableHighAccuracy: true, timeout: 15000 });
+}
+
+function goToPlace(pl) {
+  placesPanel.hidden = true;
+  navigateTo({ lat: pl.lat, lon: pl.lon, to: 'Oraya',
+               arrive: 'Vardın. Burası ' + pl.name + '.', near: 'Zaten ' + pl.name + ' yanındasın.' });
+}
+
+// ---------- 8) TELEFONA KURULUM ----------
+let installEvent = null;
+const installBtn = document.getElementById('installBtn');
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  installEvent = e;
+  installBtn.hidden = false;
+});
+installBtn.onclick = async () => {
+  if (!installEvent) return;
+  installEvent.prompt();
+  await installEvent.userChoice;
+  installEvent = null;
+  installBtn.hidden = true;
+};
+window.addEventListener('appinstalled', () => say('Uygulama telefonuna kuruldu. Ana ekrandan açabilirsin.'));
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
 document.getElementById('whereBtn').onclick = whereAmI;
 document.getElementById('repeatBtn').onclick = () => say(lastAnswer);
