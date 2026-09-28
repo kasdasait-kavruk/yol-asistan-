@@ -752,9 +752,13 @@ async function startShare(silent) {
   lsSet('takipKodu', share.code);
   share.on = true;
   lsSet('paylas', '1');
-  share.watch = navigator.geolocation.watchPosition(sendPos, () => {
-    familyStatus.textContent = 'Konum alınamıyor, konum iznini kontrol et.';
-  }, { enableHighAccuracy: true, maximumAge: 10000 });
+  const onErr = err => {
+    familyStatus.textContent = err.code === 1
+      ? 'Konum izni kapalı. Telefon ayarlarından bu uygulamaya / tarayıcıya konum izni ver.'
+      : 'Konum henüz bulunamadı (GPS aranıyor). Açık alanda biraz bekle.';
+  };
+  navigator.geolocation.getCurrentPosition(sendPos, onErr, { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 });
+  share.watch = navigator.geolocation.watchPosition(sendPos, onErr, { enableHighAccuracy: true, maximumAge: 10000 });
   shareBtn.textContent = '⏹️ Paylaşımı durdur';
   shareBtn.className = 'off';
   document.getElementById('familyLink').textContent = familyUrl();
